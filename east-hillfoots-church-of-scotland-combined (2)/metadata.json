@@ -1,0 +1,8 @@
+{
+  "name": "East Hillfoots Church of Scotland combined",
+  "description": "A centralized management platform for the unified Dollar and Muckhart church organization, featuring shared event calendars, group management, and spiritual inspiration powered by Gemini.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
