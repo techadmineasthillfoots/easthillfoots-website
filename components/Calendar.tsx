@@ -1,9 +1,9 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths, addWeeks, subWeeks } from 'date-fns';
-import { ChevronLeft, ChevronRight, LayoutList, Calendar as CalendarIcon, Clock, Check, CalendarRange, Plus, Edit3, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, LayoutList, Calendar as CalendarIcon, Clock, Check, CalendarRange, Plus, Edit3, Trash2, CalendarPlus, ExternalLink, Download, MapPin, X, ArrowLeft } from 'lucide-react';
 import { ChurchEvent, ChurchLocation } from '../types';
-import { expandEvents, EventInstance } from '../utils/eventUtils';
+import { expandEvents, EventInstance, generateICSLink, generateGoogleCalendarLink, generateOutlookLink } from '../utils/eventUtils';
 
 interface CalendarProps {
   events: ChurchEvent[];
@@ -19,6 +19,8 @@ const Calendar: React.FC<CalendarProps> = ({ events, onDateClick, onEventClick, 
   const [currentDate, setCurrentDate] = useState(new Date());
   const [view, setView] = useState<ViewType>('month');
   const [activeLocations, setActiveLocations] = useState<Set<'Dollar' | 'Muckhart'>>(new Set(['Dollar', 'Muckhart']));
+  const [activeExportId, setActiveExportId] = useState<string | null>(null);
+  const [selectedDetailEvent, setSelectedDetailEvent] = useState<EventInstance | null>(null);
 
   const range = useMemo(() => {
     let start, end;
@@ -39,9 +41,7 @@ const Calendar: React.FC<CalendarProps> = ({ events, onDateClick, onEventClick, 
   const eventInstances = useMemo(() => {
     const expanded = expandEvents(events, range.start, range.end);
     return expanded.filter(e => {
-      // If tag is missing or set to All/Both, always show if any location is active
       if (!e.tag || e.tag === 'All' || e.tag === 'Both') return activeLocations.size > 0;
-      // Otherwise strictly match the active toggles
       return activeLocations.has(e.tag as any);
     });
   }, [events, range, activeLocations]);
@@ -66,6 +66,14 @@ const Calendar: React.FC<CalendarProps> = ({ events, onDateClick, onEventClick, 
       setCurrentDate(direction === 'prev' ? subMonths(currentDate, 1) : addMonths(currentDate, 1));
     } else {
       setCurrentDate(direction === 'prev' ? subWeeks(currentDate, 1) : addWeeks(currentDate, 1));
+    }
+  };
+
+  const handleEventSelect = (e: EventInstance) => {
+    if (onEventClick) {
+      onEventClick(e);
+    } else {
+      setSelectedDetailEvent(e);
     }
   };
 
@@ -96,12 +104,10 @@ const Calendar: React.FC<CalendarProps> = ({ events, onDateClick, onEventClick, 
                 key={`${e.id}-${idx}`} 
                 title={e.title} 
                 onClick={(ev) => {
-                  if (onEventClick) {
-                    ev.stopPropagation();
-                    onEventClick(e);
-                  }
+                  ev.stopPropagation();
+                  handleEventSelect(e);
                 }}
-                className={`text-[10px] p-1 rounded leading-tight border truncate transition-all ${e.tag === 'Dollar' ? 'bg-blue-100 border-blue-200 text-blue-800' : e.tag === 'Muckhart' ? 'bg-green-100 border-green-200 text-green-800' : 'bg-indigo-100 border-indigo-200 text-indigo-800'} ${onEventClick ? 'cursor-pointer hover:brightness-95 hover:shadow-sm' : ''}`}
+                className={`text-[10px] p-1 rounded leading-tight border truncate transition-all ${e.tag === 'Dollar' ? 'bg-blue-100 border-blue-200 text-blue-800' : e.tag === 'Muckhart' ? 'bg-green-100 border-green-200 text-green-800' : 'bg-indigo-100 border-indigo-200 text-indigo-800'} cursor-pointer hover:brightness-95 hover:shadow-sm`}
               >
                 <span className="font-bold">{format(e.instanceStart, 'HH:mm')}</span> {e.title}
               </div>
@@ -136,12 +142,10 @@ const Calendar: React.FC<CalendarProps> = ({ events, onDateClick, onEventClick, 
               <div 
                 key={`${e.id}-${idx}`} 
                 onClick={(ev) => {
-                  if (onEventClick) {
-                    ev.stopPropagation();
-                    onEventClick(e);
-                  }
+                  ev.stopPropagation();
+                  handleEventSelect(e);
                 }}
-                className={`p-2 rounded-lg border-l-4 shadow-sm text-[10px] leading-tight group relative transition-all ${e.tag === 'Dollar' ? 'bg-blue-50 border-blue-500 text-blue-900' : e.tag === 'Muckhart' ? 'bg-green-50 border-green-500 text-green-900' : 'bg-indigo-50 border-indigo-500 text-indigo-900'} ${onEventClick ? 'cursor-pointer hover:translate-x-1 hover:shadow-md' : ''}`}
+                className={`p-2 rounded-lg border-l-4 shadow-sm text-[10px] leading-tight group relative transition-all cursor-pointer hover:translate-x-1 hover:shadow-md ${e.tag === 'Dollar' ? 'bg-blue-50 border-blue-500 text-blue-900' : e.tag === 'Muckhart' ? 'bg-green-50 border-green-500 text-green-900' : 'bg-indigo-50 border-indigo-500 text-indigo-900'}`}
               >
                 <div className="font-bold flex items-center gap-1">
                   <Clock className="w-2.5 h-2.5 opacity-50" />
@@ -159,40 +163,93 @@ const Calendar: React.FC<CalendarProps> = ({ events, onDateClick, onEventClick, 
 
   const renderListView = () => {
     const upcoming = [...eventInstances].sort((a, b) => a.instanceStart.getTime() - b.instanceStart.getTime());
+    
     return (
       <div className="space-y-4 p-4 md:p-6">
-        {upcoming.map((e, idx) => (
-          <div 
-            key={`${e.id}-${idx}`} 
-            onClick={() => onEventClick?.(e)}
-            className={`flex items-center bg-white p-4 rounded-xl border transition-all ${onEventClick ? 'cursor-pointer hover:shadow-md hover:border-indigo-200' : 'hover:shadow-md'}`}
-          >
-            <div className="flex flex-col items-center justify-center px-4 border-r mr-4 min-w-[80px]">
-              <span className="text-xs uppercase font-bold text-slate-400">{format(e.instanceStart, 'MMM')}</span>
-              <span className="text-2xl font-bold">{format(e.instanceStart, 'dd')}</span>
-            </div>
-            <div className="flex-1">
-              <div className="flex justify-between items-start">
-                <h4 className="font-bold text-lg">{e.title}</h4>
-                <div className="flex gap-2">
-                   {e.isRecurring && (
-                      <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded text-[9px] font-bold uppercase border">Recurring</span>
-                   )}
-                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${e.tag === 'Dollar' ? 'bg-blue-100 text-blue-800' : e.tag === 'Muckhart' ? 'bg-green-100 text-green-800' : 'bg-indigo-100 text-indigo-800'}`}>
-                    {e.tag}
-                  </span>
+        {upcoming.map((e, idx) => {
+          const instanceId = `${e.id}-${e.instanceStart.getTime()}`;
+          return (
+            <div 
+              key={instanceId} 
+              onClick={() => handleEventSelect(e)}
+              className={`flex items-center bg-white p-4 rounded-xl border transition-all cursor-pointer hover:shadow-md hover:border-indigo-200`}
+            >
+              <div className="flex flex-col items-center justify-center px-4 border-r mr-4 min-w-[80px]">
+                <span className="text-xs uppercase font-bold text-slate-400">{format(e.instanceStart, 'MMM')}</span>
+                <span className="text-2xl font-bold">{format(e.instanceStart, 'dd')}</span>
+              </div>
+              <div className="flex-1">
+                <div className="flex justify-between items-start">
+                  <h4 className="font-bold text-lg">{e.title}</h4>
+                  <div className="flex gap-2">
+                    {e.isRecurring && (
+                        <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded text-[9px] font-bold uppercase border">Recurring</span>
+                    )}
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${e.tag === 'Dollar' ? 'bg-blue-100 text-blue-800' : e.tag === 'Muckhart' ? 'bg-green-100 text-green-800' : 'bg-indigo-100 text-indigo-800'}`}>
+                      {e.tag}
+                    </span>
+                  </div>
                 </div>
+                <div className="flex items-center text-slate-500 text-sm mt-1">
+                  <Clock className="w-4 h-4 mr-1" />
+                  {format(e.instanceStart, 'h:mm a')}
+                  {e.instanceEnd && ` - ${format(e.instanceEnd, 'h:mm a')}`} @ {e.location}
+                </div>
+                <p className="text-slate-600 mt-2 text-sm line-clamp-2">{e.description}</p>
               </div>
-              <div className="flex items-center text-slate-500 text-sm mt-1">
-                <Clock className="w-4 h-4 mr-1" />
-                {format(e.instanceStart, 'h:mm a')}
-                {e.instanceEnd && ` - ${format(e.instanceEnd, 'h:mm a')}`} @ {e.location}
-              </div>
-              <p className="text-slate-600 mt-2 text-sm line-clamp-2">{e.description}</p>
-            </div>
-            
-            {(onEdit || onDelete) && (
-              <div className="flex items-center gap-2 pl-4 border-l ml-4">
+              
+              <div className="flex items-center gap-2 pl-4 border-l ml-4 relative">
+                <div className="relative">
+                  <button 
+                    onClick={(ev) => { 
+                      ev.stopPropagation(); 
+                      setActiveExportId(activeExportId === instanceId ? null : instanceId);
+                    }}
+                    title="Add to Calendar"
+                    className="p-3 text-slate-500 hover:bg-slate-50 rounded-xl transition-colors border border-slate-100 flex items-center justify-center"
+                  >
+                    <CalendarPlus className="w-5 h-5" />
+                  </button>
+
+                  {activeExportId === instanceId && (
+                    <div className="absolute right-0 top-full mt-2 w-56 bg-white border rounded-2xl shadow-2xl z-[70] p-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-3 py-2">Export Event</p>
+                      <a 
+                        href={generateGoogleCalendarLink(e)} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-indigo-50 text-sm font-medium text-slate-700 transition-colors group"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
+                           <ExternalLink className="w-4 h-4" />
+                        </div>
+                        Google Calendar
+                      </a>
+                      <a 
+                        href={generateOutlookLink(e)} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-indigo-50 text-sm font-medium text-slate-700 transition-colors group"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-sky-50 flex items-center justify-center text-sky-600">
+                           <ExternalLink className="w-4 h-4" />
+                        </div>
+                        Outlook / Office 365
+                      </a>
+                      <a 
+                        href={generateICSLink(e)} 
+                        download={`${e.title.replace(/\s+/g, '_')}.ics`}
+                        className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-indigo-50 text-sm font-medium text-slate-700 transition-colors group"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center text-slate-600">
+                           <Download className="w-4 h-4" />
+                        </div>
+                        Download (.ics)
+                      </a>
+                    </div>
+                  )}
+                </div>
+
                 {onEdit && (
                   <button 
                     onClick={(ev) => { ev.stopPropagation(); onEdit(e); }}
@@ -210,9 +267,9 @@ const Calendar: React.FC<CalendarProps> = ({ events, onDateClick, onEventClick, 
                   </button>
                 )}
               </div>
-            )}
-          </div>
-        ))}
+            </div>
+          );
+        })}
         {upcoming.length === 0 && (
           <div className="text-center py-12 bg-slate-50 rounded-xl border border-dashed text-slate-400">
             No events found for the selected period.
@@ -222,8 +279,105 @@ const Calendar: React.FC<CalendarProps> = ({ events, onDateClick, onEventClick, 
     );
   };
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = () => setActiveExportId(null);
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, []);
+
   return (
     <div className="bg-white rounded-2xl border shadow-sm overflow-hidden">
+      {/* Event Detail Modal */}
+      {selectedDetailEvent && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-300">
+            <div className="p-8 border-b flex justify-between items-center bg-slate-50">
+              <div className="flex items-center gap-3">
+                <button onClick={() => setSelectedDetailEvent(null)} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
+                  <ArrowLeft className="w-6 h-6 text-slate-500" />
+                </button>
+                <h3 className="text-2xl font-bold font-serif">Event Details</h3>
+              </div>
+              <button onClick={() => setSelectedDetailEvent(null)} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
+                <X className="w-6 h-6 text-slate-500" />
+              </button>
+            </div>
+            
+            <div className="p-8 overflow-y-auto space-y-8">
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest ${selectedDetailEvent.tag === 'Dollar' ? 'bg-blue-100 text-blue-800' : selectedDetailEvent.tag === 'Muckhart' ? 'bg-green-100 text-green-800' : 'bg-indigo-100 text-indigo-800'}`}>
+                    {selectedDetailEvent.tag}
+                  </span>
+                  {selectedDetailEvent.isRecurring && (
+                    <span className="px-3 py-1 bg-slate-100 text-slate-500 rounded-full text-xs font-bold uppercase tracking-widest border border-slate-200">
+                      Recurring
+                    </span>
+                  )}
+                </div>
+                <h2 className="text-4xl font-bold font-serif leading-tight">{selectedDetailEvent.title}</h2>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div className="flex items-start gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                  <div className="bg-indigo-100 p-2 rounded-xl text-indigo-600">
+                    <Clock className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Date & Time</p>
+                    <p className="font-bold text-slate-800">{format(selectedDetailEvent.instanceStart, 'EEEE, MMMM d')}</p>
+                    <p className="text-sm text-slate-600">
+                      {format(selectedDetailEvent.instanceStart, 'h:mm a')}
+                      {selectedDetailEvent.instanceEnd && ` - ${format(selectedDetailEvent.instanceEnd, 'h:mm a')}`}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                  <div className="bg-indigo-100 p-2 rounded-xl text-indigo-600">
+                    <MapPin className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Location</p>
+                    <p className="font-bold text-slate-800">{selectedDetailEvent.location}</p>
+                    <p className="text-sm text-slate-600">{selectedDetailEvent.tag} Parish</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">About this Event</p>
+                <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100">
+                  <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{selectedDetailEvent.description || 'No description provided for this event.'}</p>
+                </div>
+              </div>
+
+              <div className="space-y-4 pt-4 border-t border-slate-100">
+                <p className="text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest">Add to your calendar</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <a href={generateGoogleCalendarLink(selectedDetailEvent)} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 py-3 px-4 bg-white border border-slate-200 rounded-xl hover:bg-indigo-50 hover:border-indigo-200 transition-all font-bold text-sm text-slate-700">
+                    <ExternalLink className="w-4 h-4" /> Google
+                  </a>
+                  <a href={generateOutlookLink(selectedDetailEvent)} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 py-3 px-4 bg-white border border-slate-200 rounded-xl hover:bg-indigo-50 hover:border-indigo-200 transition-all font-bold text-sm text-slate-700">
+                    <ExternalLink className="w-4 h-4" /> Outlook
+                  </a>
+                  <a href={generateICSLink(selectedDetailEvent)} download={`${selectedDetailEvent.title.replace(/\s+/g, '_')}.ics`} className="flex items-center justify-center gap-2 py-3 px-4 bg-white border border-slate-200 rounded-xl hover:bg-indigo-50 hover:border-indigo-200 transition-all font-bold text-sm text-slate-700">
+                    <Download className="w-4 h-4" /> Download
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 border-t bg-slate-50">
+              <button onClick={() => setSelectedDetailEvent(null)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl hover:bg-indigo-700 transition-all">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="p-4 md:p-6 border-b flex flex-col xl:flex-row xl:items-center justify-between gap-4">
         <div className="flex items-center justify-between md:justify-start space-x-4">
           <h2 className="text-xl font-bold font-serif whitespace-nowrap min-w-[150px]">{headerLabel}</h2>

@@ -40,6 +40,15 @@ export interface ChurchGroup {
   contactPerson: string;
 }
 
+export interface KnowledgeEntry {
+  id: string;
+  title: string;
+  content: string;
+  attachmentUrl?: string;
+  attachmentName?: string;
+  lastUpdated: string;
+}
+
 export interface MissionStatement {
   text: string;
   lastUpdated: string;

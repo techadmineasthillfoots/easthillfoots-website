@@ -20,12 +20,8 @@ export const getDailyInspiration = async () => {
   }
 
   try {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-      throw new Error("API_KEY is missing from environment variables.");
-    }
-
-    const ai = new GoogleGenAI({ apiKey });
+    // Fix: Initialize GoogleGenAI using process.env.API_KEY directly as per strict SDK guidelines
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: 'Provide a unique, uplifting inspirational message (2-3 sentences) that addresses common daily struggles like stress, anxiety, grief, loneliness, or doubt. The tone should be compassionate and grounded. Support this message with a relevant Bible reference and the text of the verse itself. Return as JSON with keys: "message", "reference", "verseText".',
@@ -83,10 +79,8 @@ export const getDailyInspiration = async () => {
 
 export const refineMissionStatement = async (current: string) => {
   try {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) return current;
-
-    const ai = new GoogleGenAI({ apiKey });
+    // Fix: Initialize GoogleGenAI using process.env.API_KEY directly as per strict SDK guidelines
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: `Current mission statement: "${current}". Please refine this to be more professional, welcoming, and focused on the unity of Dollar and Muckhart churches. Keep it concise.`,

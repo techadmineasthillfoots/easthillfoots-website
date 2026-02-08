@@ -1,14 +1,15 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Plus, Trash2, Edit3, Save, X, Sparkles, Calendar as CalendarIcon, Users, Target, 
   ShieldCheck, Database, Copy, RefreshCw, 
   Link, CheckCircle2, Info,
   Code2, Loader2, Check, CloudDownload, CalendarDays, ExternalLink, AlertTriangle,
   Activity, Mail, Download, Camera, LogOut, UserCircle, Key, Clock, MapPin, Tag, Repeat,
-  Church, MessageSquare, ThumbsUp, ThumbsDown, HelpCircle, CalendarDays as CalendarIcon2
+  Church, MessageSquare, ThumbsUp, ThumbsDown, HelpCircle, CalendarDays as CalendarIcon2,
+  FileText, ListFilter, PieChart, FileSpreadsheet, ChevronRight, Library, Paperclip, FileJson
 } from 'lucide-react';
-import { ChurchEvent, ChurchGroup, MissionStatement, ChurchContact, Subscriber, ChurchLocation, RecurrenceType, Feedback } from '../types';
+import { ChurchEvent, ChurchGroup, MissionStatement, ChurchContact, Subscriber, ChurchLocation, RecurrenceType, Feedback, KnowledgeEntry } from '../types';
 import { ROLES, LOCATIONS, CONTACT_TITLES } from '../constants';
 import { refineMissionStatement } from '../services/geminiService';
 import { 
@@ -19,7 +20,8 @@ import {
   syncEntryToSheet 
 } from '../services/googleSheetsService';
 import Calendar from '../components/Calendar';
-import { format } from 'date-fns';
+import { format, addMonths, endOfMonth, startOfDay, isBefore } from 'date-fns';
+import { expandEvents, EventInstance } from '../utils/eventUtils';
 
 interface AdminDashboardProps {
   events: ChurchEvent[];
@@ -27,6 +29,7 @@ interface AdminDashboardProps {
   contacts: ChurchContact[];
   subscribers: Subscriber[];
   feedback: Feedback[];
+  knowledge: KnowledgeEntry[];
   mission: MissionStatement;
   googleSheetsUrl: string;
   isSyncing: boolean;
@@ -36,6 +39,8 @@ interface AdminDashboardProps {
   onDeleteGroup: (id: string) => void;
   onSaveContact: (contact: ChurchContact) => void;
   onDeleteContact: (id: string) => void;
+  onSaveKnowledge: (entry: KnowledgeEntry) => void;
+  onDeleteKnowledge: (id: string) => void;
   onSaveMission: (mission: MissionStatement) => void;
   onUpdateSubscribers: (subscribers: Subscriber[]) => void;
   onUpdateFeedback: (feedback: Feedback[]) => void;
@@ -43,17 +48,18 @@ interface AdminDashboardProps {
   onBulkUpdateEvents: (events: ChurchEvent[]) => void;
   onBulkUpdateGroups: (groups: ChurchGroup[]) => void;
   onBulkUpdateContacts: (contacts: ChurchContact[]) => void;
+  onBulkUpdateKnowledge: (knowledge: KnowledgeEntry[]) => void;
   onRefreshAll: () => Promise<void>;
   onLogout: () => void;
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({
-  events, groups, contacts, subscribers, feedback, mission, googleSheetsUrl, isSyncing,
+  events, groups, contacts, subscribers, feedback, knowledge, mission, googleSheetsUrl, isSyncing,
   onSaveEvent, onDeleteEvent, onSaveGroup, onDeleteGroup, onSaveContact, onDeleteContact,
-  onSaveMission, onUpdateSubscribers, onUpdateFeedback, onUpdateSheetsUrl,
-  onBulkUpdateEvents, onBulkUpdateGroups, onBulkUpdateContacts, onRefreshAll, onLogout
+  onSaveKnowledge, onDeleteKnowledge, onSaveMission, onUpdateSubscribers, onUpdateFeedback, onUpdateSheetsUrl,
+  onBulkUpdateEvents, onBulkUpdateGroups, onBulkUpdateContacts, onBulkUpdateKnowledge, onRefreshAll, onLogout
 }) => {
-  const [activeTab, setActiveTab] = useState<'events' | 'groups' | 'contacts' | 'subscribers' | 'feedback' | 'mission' | 'system' | 'account'>('events');
+  const [activeTab, setActiveTab] = useState<'events' | 'groups' | 'contacts' | 'subscribers' | 'feedback' | 'mission' | 'knowledge' | 'reports' | 'system' | 'account'>('events');
   const [isRefining, setIsRefining] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
@@ -71,7 +77,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const [showContactForm, setShowContactForm] = useState(false);
   const [editingContact, setEditingContact] = useState<Partial<ChurchContact> | null>(null);
-  const contactFileInputRef = useRef<HTMLInputElement>(null);
+
+  const [showKnowledgeForm, setShowKnowledgeForm] = useState(false);
+  const [editingKnowledge, setEditingKnowledge] = useState<Partial<KnowledgeEntry> | null>(null);
 
   const [adminEmail, setAdminEmail] = useState('');
   const [newPassword, setPassword] = useState('');
@@ -87,113 +95,40 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const addLog = (res: SyncResult) => setSyncLogs(prev => [res, ...prev].slice(0, 10));
 
-  const getFlexibleValue = (obj: any, keys: string[]) => {
-    if (!obj) return undefined;
-    const objKeys = Object.keys(obj);
-    for (const searchKey of keys) {
-      const normalizedSearch = searchKey.toLowerCase().replace(/\s/g, '');
-      const foundActualKey = objKeys.find(k => k.toLowerCase().replace(/\s/g, '') === normalizedSearch);
-      if (foundActualKey !== undefined) return obj[foundActualKey];
-    }
-    return undefined;
-  };
+  const reportData = useMemo(() => {
+    const today = startOfDay(new Date());
+    const nextMonthEnd = endOfMonth(addMonths(today, 1));
+    const instances = expandEvents(events, today, nextMonthEnd);
+    return {
+      instances: instances.sort((a, b) => a.instanceStart.getTime() - b.instanceStart.getTime()),
+      rangeStart: today,
+      rangeEnd: nextMonthEnd
+    };
+  }, [events]);
 
-  const parseCloudDate = (val: any): string | null => {
-    if (!val) return null;
-    const s = String(val).trim();
-    if (!s) return null;
-    const isoMatch = s.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
-    if (isoMatch) return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
-    const slashMatch = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
-    if (slashMatch) {
-      let d = parseInt(slashMatch[1]);
-      let m = parseInt(slashMatch[2]);
-      let y = parseInt(slashMatch[3]);
-      if (d > 12) return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      try {
-        const testDate = new Date(s);
-        if (!isNaN(testDate.getTime())) return testDate.toISOString().split('T')[0];
-      } catch (e) {}
-    }
-    try {
-      const d = new Date(s);
-      if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
-    } catch (e) {}
-    return null;
-  };
+  const handleDownloadCSV = () => {
+    const headers = ["Title", "Date", "Start Time", "End Time", "Location", "Tag", "Description"];
+    const rows = reportData.instances.map(inst => [
+      `"${inst.title.replace(/"/g, '""')}"`,
+      format(inst.instanceStart, 'yyyy-MM-dd'),
+      format(inst.instanceStart, 'HH:mm'),
+      inst.instanceEnd ? format(inst.instanceEnd, 'HH:mm') : '',
+      inst.location,
+      inst.tag,
+      `"${(inst.description || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`
+    ]);
 
-  const sanitizeData = (items: any[], type: string) => {
-    if (!items || !Array.isArray(items)) return [];
-    return items.map((item, idx) => {
-      if (type === 'events') {
-        const rawDate = getFlexibleValue(item, ['eventdate', 'date', 'day']);
-        const rawRecur = getFlexibleValue(item, ['isrecurring', 'recurring', 'repeat?']);
-        const recurrence = getFlexibleValue(item, ['recurrence', 'frequency', 'repeat']) || 'None';
-        const normalizeLoc = (val: any) => {
-          const v = String(val || '').trim().toLowerCase();
-          if (v.includes('dollar')) return 'Dollar';
-          if (v.includes('muckhart')) return 'Muckhart';
-          return 'All';
-        };
-        const e: any = {
-          id: getFlexibleValue(item, ['id']) || `event-${idx}`,
-          title: getFlexibleValue(item, ['title', 'name', 'event']) || 'Untitled',
-          description: getFlexibleValue(item, ['description', 'details']) || '',
-          location: normalizeLoc(getFlexibleValue(item, ['location'])),
-          tag: normalizeLoc(getFlexibleValue(item, ['tag'])),
-          startTime: getFlexibleValue(item, ['starttime', 'start']) || '',
-          endTime: getFlexibleValue(item, ['endtime', 'end']) || '',
-          eventDate: parseCloudDate(rawDate) || new Date().toISOString().split('T')[0],
-          recurrence: recurrence,
-          isRecurring: rawRecur !== undefined ? (String(rawRecur).toLowerCase().trim() === 'true' || String(rawRecur).toLowerCase().trim() === 'yes' || String(rawRecur) === '1') : recurrence !== 'None',
-          dayOfWeek: Number(getFlexibleValue(item, ['dayofweek'])) || 0,
-          weekOfMonth: Number(getFlexibleValue(item, ['weekofmonth'])) || 1,
-        };
-        return e;
-      } else if (type === 'contacts') {
-        return {
-          id: getFlexibleValue(item, ['id']) || `contact-${idx}`,
-          name: getFlexibleValue(item, ['name', 'fullname']) || 'Unknown',
-          title: getFlexibleValue(item, ['title', 'position']) || '',
-          role: getFlexibleValue(item, ['role', 'accessrole']) || 'Volunteer',
-          email: getFlexibleValue(item, ['email', 'emailaddress']) || '',
-          phone: String(getFlexibleValue(item, ['phone', 'telephone']) || ''),
-          imageUrl: getFlexibleValue(item, ['imageurl', 'image']) || '',
-          displayPublicly: getFlexibleValue(item, ['displaypublicly', 'public']) !== undefined ? (String(getFlexibleValue(item, ['displaypublicly', 'public'])).toLowerCase().trim() === 'true') : true,
-        };
-      } else if (type === 'groups') {
-        return {
-          id: getFlexibleValue(item, ['id']) || `group-${idx}`,
-          name: getFlexibleValue(item, ['name', 'groupname']) || 'Untitled Group',
-          description: getFlexibleValue(item, ['description']) || '',
-          church: String(getFlexibleValue(item, ['church', 'location']) || '').toLowerCase().includes('muckhart') ? 'Muckhart' : 'Dollar',
-          meetingTime: getFlexibleValue(item, ['meetingtime', 'time']) || '',
-          contactPerson: getFlexibleValue(item, ['contactperson', 'contact']) || '',
-        };
-      } else if (type === 'subscriber') {
-        return {
-          id: getFlexibleValue(item, ['id', 'uuid']) || `sub-${idx}`,
-          name: getFlexibleValue(item, ['name', 'fullname', 'member']) || 'Subscriber',
-          email: getFlexibleValue(item, ['email', 'emailaddress']) || '',
-          subscribedAt: getFlexibleValue(item, ['subscribedat', 'date']) || new Date().toISOString()
-        };
-      } else if (type === 'feedback') {
-        return {
-          id: getFlexibleValue(item, ['id', 'uuid']) || `fb-${idx}`,
-          foundLooking: getFlexibleValue(item, ['foundlooking', 'found']) || 'Yes',
-          improveWebsite: getFlexibleValue(item, ['improvewebsite', 'improve']) || '',
-          addRemove: getFlexibleValue(item, ['addremove', 'changes']) || '',
-          submittedAt: getFlexibleValue(item, ['submittedat', 'date']) || new Date().toISOString(),
-          pagePath: getFlexibleValue(item, ['pagepath', 'page']) || 'Home'
-        };
-      } else if (type === 'mission') {
-        return {
-          text: getFlexibleValue(item, ['text', 'mission', 'statement']) || '',
-          lastUpdated: getFlexibleValue(item, ['lastupdated', 'date']) || new Date().toISOString()
-        };
-      }
-      return item;
-    });
+    const csvContent = "data:text/csv;charset=utf-8," 
+      + headers.join(",") + "\n"
+      + rows.map(r => r.join(",")).join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `Parish_Events_Report_${format(new Date(), 'yyyy-MM-dd')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handlePullSection = async (sheetName: string, updateFn: (data: any[]) => void) => {
@@ -202,9 +137,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     try {
       const data = await fetchSheetData(googleSheetsUrl, sheetName);
       if (data && data.length > 0) {
-        const sanitized = sanitizeData(data, sheetName);
-        updateFn(sanitized);
-        addLog({ success: true, message: `Successfully pulled and sanitized ${sanitized.length} items from ${sheetName}.`, timestamp: new Date().toLocaleTimeString() });
+        addLog({ success: true, message: `Successfully pulled items from ${sheetName}.`, timestamp: new Date().toLocaleTimeString() });
+        onRefreshAll(); // Refresh local states via shared refresh
       } else {
         addLog({ success: false, message: `No data found in cloud for ${sheetName}.`, timestamp: new Date().toLocaleTimeString() });
       }
@@ -215,44 +149,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleRefineMission = async () => {
-    if (!missionInput) return;
-    setIsRefining(true);
-    try {
-      const refined = await refineMissionStatement(missionInput);
-      setMissionInput(refined);
-      addLog({ success: true, message: "Mission refined by Gemini AI.", timestamp: new Date().toLocaleTimeString() });
-    } catch (err) {
-      addLog({ success: false, message: "AI refinement failed.", timestamp: new Date().toLocaleTimeString() });
-    } finally {
-      setIsRefining(false);
-    }
-  };
-
-  const handleUpdateAccount = (e: React.FormEvent) => {
-    e.preventDefault();
-    const creds = JSON.parse(localStorage.getItem('admin_account_credentials') || '{"email":"admin@easthillfoots.org","password":"password123"}');
-    const updated = { email: adminEmail, password: newPassword || creds.password };
-    localStorage.setItem('admin_account_credentials', JSON.stringify(updated));
-    setAccountUpdateSuccess(true);
-    setPassword('');
-    setTimeout(() => setAccountUpdateSuccess(false), 3000);
-    addLog({ success: true, message: "Admin account settings updated.", timestamp: new Date().toLocaleTimeString() });
-  };
-
-  const handleSaveMissionToCloud = async () => {
-    const newMission = { text: missionInput, lastUpdated: new Date().toISOString() };
-    onSaveMission(newMission);
-    setShowSavedToast(true);
-    setTimeout(() => setShowSavedToast(false), 3000);
-  };
-
   const handleAddNewEvent = () => {
-    const now = new Date();
     setEditingEvent({
       title: '',
       description: '',
-      eventDate: now.toISOString().slice(0, 10),
+      eventDate: new Date().toISOString().slice(0, 10),
       timeStart: '',
       timeEnd: '',
       location: 'Dollar',
@@ -260,24 +161,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       isRecurring: false,
       recurrence: 'None',
       weekOfMonth: 1
-    });
-    setShowEventForm(true);
-  };
-
-  const handleDateClick = (date: Date) => {
-    const dateStr = date.toISOString().slice(0, 10);
-    const weekOfMonth = Math.ceil(date.getDate() / 7) as 1 | 2 | 3 | 4 | 5;
-    setEditingEvent({
-      title: '',
-      description: '',
-      eventDate: dateStr,
-      timeStart: '',
-      timeEnd: '',
-      location: 'Dollar',
-      tag: 'Dollar',
-      isRecurring: false,
-      recurrence: 'None',
-      weekOfMonth: weekOfMonth > 4 ? 5 : weekOfMonth as 1 | 2 | 3 | 4 | 5
     });
     setShowEventForm(true);
   };
@@ -304,39 +187,53 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleSaveEventForm = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingEvent?.title || !editingEvent?.eventDate) return;
-    try {
-      const { eventDate, timeStart, timeEnd, isRecurring, recurrenceEndDate, weekOfMonth: userWeekOfMonth } = editingEvent;
-      const constructISO = (dateStr: string, timeStr?: string) => {
-        if (!timeStr) return new Date(dateStr).toISOString();
-        return new Date(`${dateStr}T${timeStr}:00`).toISOString();
-      };
-      const startTimeISO = timeStart ? constructISO(eventDate, timeStart) : undefined;
-      const endTimeISO = timeEnd ? constructISO(eventDate, timeEnd) : undefined;
-      const dateObj = new Date(eventDate);
-      const dayOfWeek = dateObj.getDay();
-      const detectedWeekOfMonth = Math.ceil(dateObj.getDate() / 7) as 1 | 2 | 3 | 4 | 5;
-      const event: ChurchEvent = {
-        title: editingEvent.title || '',
-        description: editingEvent.description || '',
-        eventDate: eventDate,
-        startTime: startTimeISO,
-        endTime: endTimeISO,
-        location: editingEvent.location || 'Dollar',
-        tag: editingEvent.tag || 'Dollar',
-        isRecurring: !!isRecurring,
-        recurrence: editingEvent.recurrence || 'None',
-        id: editingEvent.id || Math.random().toString(36).substr(2, 9),
-        recurrenceEndDate: (isRecurring && recurrenceEndDate) ? new Date(recurrenceEndDate).toISOString() : undefined,
-        dayOfWeek: isRecurring ? dayOfWeek : undefined,
-        weekOfMonth: isRecurring ? (userWeekOfMonth || detectedWeekOfMonth) : undefined
-      };
-      onSaveEvent(event);
-      setShowEventForm(false);
-      setEditingEvent(null);
-      addLog({ success: true, message: `Event '${event.title}' saved locally.`, timestamp: new Date().toLocaleTimeString() });
-    } catch (err: any) {
-      alert("Error saving event.");
-    }
+    const event: ChurchEvent = {
+      ...editingEvent as ChurchEvent,
+      id: editingEvent.id || Math.random().toString(36).substr(2, 9),
+      startTime: editingEvent.timeStart ? new Date(`${editingEvent.eventDate}T${editingEvent.timeStart}:00`).toISOString() : undefined,
+      endTime: editingEvent.timeEnd ? new Date(`${editingEvent.eventDate}T${editingEvent.timeEnd}:00`).toISOString() : undefined,
+    };
+    onSaveEvent(event);
+    setShowEventForm(false);
+    setEditingEvent(null);
+  };
+
+  const handleAddNewKnowledge = () => {
+    setEditingKnowledge({ title: '', content: '', attachmentUrl: '', attachmentName: '' });
+    setShowKnowledgeForm(true);
+  };
+
+  const handleEditKnowledge = (entry: KnowledgeEntry) => {
+    setEditingKnowledge(entry);
+    setShowKnowledgeForm(true);
+  };
+
+  const handleSaveKnowledgeForm = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingKnowledge?.title || !editingKnowledge?.content) return;
+    const entry: KnowledgeEntry = {
+      ...editingKnowledge as KnowledgeEntry,
+      id: editingKnowledge.id || Math.random().toString(36).substr(2, 9),
+      lastUpdated: new Date().toISOString()
+    };
+    onSaveKnowledge(entry);
+    setShowKnowledgeForm(false);
+    setEditingKnowledge(null);
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setEditingKnowledge(prev => ({
+        ...prev,
+        attachmentUrl: reader.result as string,
+        attachmentName: file.name
+      }));
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleAddNewGroup = () => {
@@ -345,14 +242,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleEditGroup = (group: ChurchGroup) => {
-    setEditingGroup(group);
+    setEditingGroup({ ...group });
     setShowGroupForm(true);
   };
 
   const handleSaveGroupForm = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingGroup?.name) return;
-    const group: ChurchGroup = { ...editingGroup as ChurchGroup, id: editingGroup.id || Math.random().toString(36).substr(2, 9) };
+    const group: ChurchGroup = { 
+      ...editingGroup as ChurchGroup, 
+      id: editingGroup.id || Math.random().toString(36).substr(2, 9)
+    };
     onSaveGroup(group);
     setShowGroupForm(false);
     setEditingGroup(null);
@@ -377,15 +277,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setEditingContact(null);
   };
 
-  const handleContactFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onload = (ev) => setEditingContact(prev => ({ ...prev, imageUrl: ev.target?.result as string }));
-      reader.readAsDataURL(file);
-    }
-  };
-
   const inputClasses = "w-full p-4 border border-slate-200 rounded-2xl bg-white text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none transition-all placeholder:text-slate-400";
 
   return (
@@ -402,7 +293,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
       <div className="flex space-x-1 bg-slate-100 p-1.5 rounded-2xl w-fit overflow-x-auto shadow-inner">
-        {['events','groups','contacts','subscribers','feedback','mission','system','account'].map(tab => (
+        {['events','groups','knowledge','contacts','subscribers','feedback','mission','reports','system','account'].map(tab => (
           <button key={tab} onClick={() => setActiveTab(tab as any)} className={`px-6 py-2 rounded-xl text-sm font-bold capitalize transition-all ${activeTab === tab ? 'bg-white shadow-md text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>{tab}</button>
         ))}
       </div>
@@ -416,7 +307,109 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button onClick={handleAddNewEvent} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-100"><Plus className="w-4 h-4" /> Add Event</button>
             </div>
           </div>
-          <Calendar events={events} onEdit={handleEditEvent} onDelete={onDeleteEvent} onEventClick={handleEditEvent} onDateClick={handleDateClick} />
+          <Calendar events={events} onEdit={handleEditEvent} onDelete={onDeleteEvent} onEventClick={handleEditEvent} onDateClick={(date) => {
+             setEditingEvent({ eventDate: date.toISOString().slice(0, 10), title: '', description: '', location: 'Dollar', tag: 'Dollar', isRecurring: false });
+             setShowEventForm(true);
+          }} />
+        </div>
+      )}
+
+      {activeTab === 'knowledge' && (
+        <div className="space-y-6">
+          <div className="flex justify-between items-center">
+            <div className="space-y-1">
+               <h2 className="text-xl font-bold">Knowledge Database</h2>
+               <p className="text-xs text-slate-400">Entries here directly inform the Parish Chatbot Assistant.</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => handlePullSection('knowledge', onBulkUpdateKnowledge)} disabled={isPulling} className="bg-slate-100 p-2.5 rounded-xl hover:bg-slate-200 transition-colors flex items-center gap-2 text-xs font-bold">{isPulling ? <Loader2 className="w-4 h-4 animate-spin" /> : <CloudDownload className="w-4 h-4" />} Cloud Pull</button>
+              <button onClick={handleAddNewKnowledge} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-100"><Plus className="w-4 h-4" /> Add Knowledge</button>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {knowledge.map(entry => (
+              <div key={entry.id} className="bg-white p-6 rounded-2xl border shadow-sm group hover:shadow-md transition-all flex flex-col h-full">
+                <div className="flex justify-between items-start mb-4">
+                  <div className="bg-indigo-50 p-3 rounded-xl text-indigo-600"><Library className="w-6 h-6" /></div>
+                  <div className="flex gap-1">
+                    <button onClick={() => handleEditKnowledge(entry)} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"><Edit3 className="w-4 h-4" /></button>
+                    <button onClick={() => onDeleteKnowledge(entry.id)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
+                  </div>
+                </div>
+                <h3 className="text-lg font-bold mb-2 group-hover:text-indigo-600 transition-colors">{entry.title}</h3>
+                <p className="text-slate-500 text-sm mb-6 flex-grow line-clamp-4">{entry.content}</p>
+                <div className="flex items-center justify-between pt-4 border-t text-xs text-slate-400">
+                  <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> Updated {format(new Date(entry.lastUpdated), 'MMM d, yyyy')}</span>
+                  {entry.attachmentName && <span className="flex items-center gap-1 text-indigo-500 font-bold"><Paperclip className="w-3 h-3" /> Attachment</span>}
+                </div>
+              </div>
+            ))}
+            {knowledge.length === 0 && (
+               <div className="col-span-full py-20 text-center bg-slate-50 rounded-[2.5rem] border border-dashed border-slate-200">
+                  <Library className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+                  <p className="text-slate-500 font-medium">Your knowledge base is currently empty.</p>
+                  <button onClick={handleAddNewKnowledge} className="mt-4 text-indigo-600 font-bold hover:underline">Create your first entry</button>
+               </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showKnowledgeForm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+           <div className="bg-white w-full max-w-4xl rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-300">
+              <div className="p-8 border-b flex justify-between items-center bg-slate-50">
+                 <h3 className="text-2xl font-bold font-serif">{editingKnowledge?.id ? 'Edit Knowledge Entry' : 'New Knowledge Entry'}</h3>
+                 <button onClick={() => setShowKnowledgeForm(false)} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X className="w-6 h-6 text-slate-500" /></button>
+              </div>
+              <form onSubmit={handleSaveKnowledgeForm} className="p-8 space-y-6 overflow-y-auto">
+                 <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Entry Title</label>
+                    <input type="text" placeholder="e.g. History of Muckhart Church" className={inputClasses} value={editingKnowledge?.title || ''} onChange={e => setEditingKnowledge({...editingKnowledge, title: e.target.value})} />
+                 </div>
+                 
+                 <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Description / Content</label>
+                    <textarea 
+                      placeholder="Enter the full knowledge content here. This text will be used by the Parish Assistant AI to answer queries." 
+                      className={`${inputClasses} min-h-[300px] leading-relaxed`} 
+                      value={editingKnowledge?.content || ''} 
+                      onChange={e => setEditingKnowledge({...editingKnowledge, content: e.target.value})} 
+                    />
+                 </div>
+
+                 <div className="space-y-4">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Attachment (Optional)</label>
+                    <div className="flex items-center gap-4 p-6 bg-slate-50 border border-slate-200 border-dashed rounded-2xl">
+                       <div className="w-12 h-12 bg-white rounded-xl shadow-sm flex items-center justify-center text-indigo-500">
+                          {editingKnowledge?.attachmentName ? <FileText className="w-6 h-6" /> : <Paperclip className="w-6 h-6" />}
+                       </div>
+                       <div className="flex-1">
+                          <p className="text-sm font-bold text-slate-700">{editingKnowledge?.attachmentName || 'No file selected'}</p>
+                          <p className="text-xs text-slate-400">PDF, JPG, or PNG (Max 5MB)</p>
+                       </div>
+                       <label className="cursor-pointer bg-white border px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-50 transition-colors shadow-sm">
+                          {editingKnowledge?.attachmentName ? 'Change' : 'Upload File'}
+                          <input type="file" className="hidden" onChange={handleFileChange} accept="application/pdf,image/*" />
+                       </label>
+                       {editingKnowledge?.attachmentName && (
+                          <button type="button" onClick={() => setEditingKnowledge({...editingKnowledge, attachmentUrl: '', attachmentName: ''})} className="p-2 text-red-500 hover:bg-red-50 rounded-lg">
+                             <Trash2 className="w-4 h-4" />
+                          </button>
+                       )}
+                    </div>
+                 </div>
+
+                 <div className="flex gap-4 pt-4 border-t">
+                   <button type="button" onClick={() => setShowKnowledgeForm(false)} className="flex-1 py-4 text-slate-500 font-bold border rounded-2xl hover:bg-slate-50 transition-colors">Cancel</button>
+                   <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2">
+                     <Save className="w-5 h-5" />
+                     Save Entry
+                   </button>
+                 </div>
+              </form>
+           </div>
         </div>
       )}
 
@@ -484,74 +477,207 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
-      {activeTab === 'subscribers' && (
-        <div className="space-y-6">
-           <div className="flex justify-between items-center">
-              <h2 className="text-xl font-bold">Subscribers</h2>
-              <button onClick={() => handlePullSection('subscriber', onUpdateSubscribers)} disabled={isPulling} className="bg-slate-100 p-2.5 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-slate-200"><CloudDownload className="w-4 h-4" /> Pull Subscribers</button>
-           </div>
-           <div className="bg-white rounded-2xl border overflow-hidden shadow-sm">
-              <table className="w-full text-left">
-                 <thead className="bg-slate-50 border-b text-[10px] font-bold uppercase text-slate-400">
-                    <tr>
-                       <th className="p-4">Name</th>
-                       <th className="p-4">Email</th>
-                       <th className="p-4">Joined</th>
-                    </tr>
-                 </thead>
-                 <tbody className="divide-y">
-                    {subscribers.map(s => (
-                      <tr key={s.id}>
-                         <td className="p-4 font-bold">{s.name}</td>
-                         <td className="p-4">{s.email}</td>
-                         <td className="p-4 text-xs text-slate-400">{new Date(s.subscribedAt).toLocaleDateString()}</td>
-                      </tr>
-                    ))}
-                 </tbody>
-              </table>
-           </div>
-        </div>
-      )}
-
-      {activeTab === 'feedback' && (
-        <div className="space-y-6">
-           <div className="flex justify-between items-center">
-              <h2 className="text-xl font-bold">Feedback</h2>
-              <button onClick={() => handlePullSection('feedback', onUpdateFeedback)} disabled={isPulling} className="bg-slate-100 p-2.5 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-slate-200"><CloudDownload className="w-4 h-4" /> Pull Feedback</button>
-           </div>
-           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {feedback.map(f => (
-                <div key={f.id} className="bg-white p-6 rounded-2xl border shadow-sm">
-                   <div className="flex justify-between items-center mb-4">
-                      <span className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded text-[10px] font-bold uppercase">{f.foundLooking}</span>
-                      <span className="text-[10px] text-slate-400">{new Date(f.submittedAt).toLocaleDateString()}</span>
-                   </div>
-                   <p className="text-sm font-bold mb-1">To Improve:</p>
-                   <p className="text-sm text-slate-600 mb-4 italic">"{f.improveWebsite}"</p>
-                   <p className="text-sm font-bold mb-1">Add/Remove:</p>
-                   <p className="text-sm text-slate-600">"{f.addRemove}"</p>
-                   <div className="mt-4 pt-4 border-t text-[10px] text-slate-400">Page: {f.pagePath}</div>
+      {showEventForm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+           <div className="bg-white w-full max-w-4xl rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[95vh] animate-in zoom-in-95 duration-300">
+              <div className="p-8 border-b flex justify-between items-center bg-slate-50">
+                 <h3 className="text-2xl font-bold font-serif">{editingEvent?.id ? 'Edit Parish Event' : 'Create New Parish Event'}</h3>
+                 <button onClick={() => setShowEventForm(false)} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X className="w-6 h-6 text-slate-500" /></button>
+              </div>
+              <form onSubmit={handleSaveEventForm} className="overflow-y-auto p-8 space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Basic Info</label>
+                  <input type="text" placeholder="Event Title" className={inputClasses} value={editingEvent?.title || ''} onChange={e => setEditingEvent({...editingEvent, title: e.target.value})} />
+                  <textarea 
+                    placeholder="Description" 
+                    className={`${inputClasses} min-h-[160px]`} 
+                    value={editingEvent?.description || ''} 
+                    onChange={e => setEditingEvent({...editingEvent, description: e.target.value})} 
+                  />
                 </div>
-              ))}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                   <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Event Date</label>
+                      <input type="date" className={inputClasses} value={editingEvent?.eventDate || ''} onChange={e => setEditingEvent({...editingEvent, eventDate: e.target.value})} />
+                   </div>
+                   <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Time (Start - End)</label>
+                      <div className="flex gap-2">
+                         <input type="time" className={inputClasses} value={editingEvent?.timeStart || ''} onChange={e => setEditingEvent({...editingEvent, timeStart: e.target.value})} />
+                         <input type="time" className={inputClasses} value={editingEvent?.timeEnd || ''} onChange={e => setEditingEvent({...editingEvent, timeEnd: e.target.value})} />
+                      </div>
+                   </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-slate-50 rounded-3xl border border-slate-100">
+                   <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Recurrence</label>
+                        <button 
+                          type="button"
+                          onClick={() => {
+                            const nextState = !editingEvent?.isRecurring;
+                            setEditingEvent({
+                              ...editingEvent, 
+                              isRecurring: nextState,
+                              recurrence: nextState ? (editingEvent?.recurrence && editingEvent?.recurrence !== 'None' ? editingEvent.recurrence : 'Weekly') : 'None'
+                            });
+                          }}
+                          className={`w-12 h-6 rounded-full transition-all relative ${editingEvent?.isRecurring ? 'bg-indigo-600' : 'bg-slate-300'}`}
+                        >
+                          <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${editingEvent?.isRecurring ? 'left-7' : 'left-1'}`} />
+                        </button>
+                      </div>
+                      
+                      {editingEvent?.isRecurring && (
+                        <div className="space-y-4 animate-in slide-in-from-top-2 duration-300">
+                           <div className="space-y-1">
+                              <label className="text-[9px] font-bold text-slate-400 uppercase">Frequency</label>
+                              <select 
+                                className={`${inputClasses} py-2`} 
+                                value={editingEvent?.recurrence || 'Weekly'} 
+                                onChange={e => setEditingEvent({...editingEvent, recurrence: e.target.value as RecurrenceType})}
+                              >
+                                <option value="Weekly">Weekly</option>
+                                <option value="BiWeekly">Bi-Weekly</option>
+                                <option value="MonthlyRelative">Monthly (Relative to date)</option>
+                              </select>
+                           </div>
+                           <div className="space-y-1">
+                              <label className="text-[9px] font-bold text-slate-400 uppercase">End Date</label>
+                              <input 
+                                type="date" 
+                                className={`${inputClasses} py-2`} 
+                                value={editingEvent?.recurrenceEndDate || ''} 
+                                onChange={e => setEditingEvent({...editingEvent, recurrenceEndDate: e.target.value})} 
+                              />
+                           </div>
+                        </div>
+                      )}
+                   </div>
+
+                   <div className="space-y-3">
+                      <label className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Classification</label>
+                      <div className="space-y-4">
+                         <div className="space-y-1">
+                            <label className="text-[9px] font-bold text-slate-400 uppercase">Location</label>
+                            <select 
+                              className={`${inputClasses} py-2`} 
+                              value={editingEvent?.location || 'Dollar'} 
+                              onChange={e => setEditingEvent({...editingEvent, location: e.target.value as ChurchLocation})}
+                            >
+                              <option value="Dollar">Dollar</option>
+                              <option value="Muckhart">Muckhart</option>
+                              <option value="Both">Both</option>
+                            </select>
+                         </div>
+                         <div className="space-y-1">
+                            <label className="text-[9px] font-bold text-slate-400 uppercase">Filter Tag</label>
+                            <select 
+                              className={`${inputClasses} py-2`} 
+                              value={editingEvent?.tag || 'Dollar'} 
+                              onChange={e => setEditingEvent({...editingEvent, tag: e.target.value as any})}
+                            >
+                              <option value="Dollar">Dollar</option>
+                              <option value="Muckhart">Muckhart</option>
+                              <option value="All">All Churches</option>
+                            </select>
+                         </div>
+                      </div>
+                   </div>
+                </div>
+
+                <div className="flex gap-4 pt-4 border-t">
+                  <button type="button" onClick={() => setShowEventForm(false)} className="flex-1 py-4 text-slate-500 font-bold border rounded-2xl hover:bg-slate-50 transition-colors">Cancel</button>
+                  <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2">
+                    <Save className="w-5 h-5" />
+                    Save Event
+                  </button>
+                </div>
+              </form>
            </div>
         </div>
       )}
 
-      {activeTab === 'mission' && (
-        <div className="space-y-6 max-w-4xl mx-auto">
-           <div className="flex justify-between items-center">
-              <h2 className="text-xl font-bold">Parish Mission Statement</h2>
-              <button onClick={() => handlePullSection('mission', (data) => onSaveMission(data[data.length-1]))} className="bg-slate-100 p-2.5 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-slate-200"><CloudDownload className="w-4 h-4" /> Pull Cloud</button>
+      {showGroupForm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+           <div className="bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-300">
+              <div className="p-8 border-b flex justify-between items-center bg-slate-50">
+                 <h3 className="text-2xl font-bold font-serif">{editingGroup?.id ? 'Edit Group Profile' : 'New Group Profile'}</h3>
+                 <button onClick={() => setShowGroupForm(false)} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X className="w-6 h-6 text-slate-500" /></button>
+              </div>
+              <form onSubmit={handleSaveGroupForm} className="p-8 space-y-6 overflow-y-auto">
+                 <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Group Details</label>
+                    <input type="text" placeholder="Group Name" className={inputClasses} value={editingGroup?.name || ''} onChange={e => setEditingGroup({...editingGroup, name: e.target.value})} />
+                    <textarea placeholder="Description" className={inputClasses} value={editingGroup?.description || ''} onChange={e => setEditingGroup({...editingGroup, description: e.target.value})} />
+                 </div>
+                 
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Parish Branch</label>
+                       <select 
+                         className={inputClasses} 
+                         value={editingGroup?.church || 'Dollar'} 
+                         onChange={e => setEditingGroup({...editingGroup, church: e.target.value as any})}
+                       >
+                         <option value="Dollar">Dollar</option>
+                         <option value="Muckhart">Muckhart</option>
+                       </select>
+                    </div>
+                    <div className="space-y-2">
+                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Meeting Time</label>
+                       <input 
+                         type="text" 
+                         placeholder="e.g. Mon 10:00 AM" 
+                         className={inputClasses} 
+                         value={editingGroup?.meetingTime || ''} 
+                         onChange={e => setEditingGroup({...editingGroup, meetingTime: e.target.value})} 
+                       />
+                    </div>
+                 </div>
+
+                 <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Lead Contact Person</label>
+                    <div className="relative">
+                      <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300" />
+                      <input 
+                        type="text" 
+                        placeholder="Name of contact" 
+                        className={`${inputClasses} pl-12`} 
+                        value={editingGroup?.contactPerson || ''} 
+                        onChange={e => setEditingGroup({...editingGroup, contactPerson: e.target.value})} 
+                      />
+                    </div>
+                 </div>
+
+                 <div className="flex gap-4 pt-4">
+                   <button type="button" onClick={() => setShowGroupForm(false)} className="flex-1 py-4 text-slate-500 font-bold border rounded-2xl">Cancel</button>
+                   <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl">Save Group</button>
+                 </div>
+              </form>
            </div>
-           <div className="bg-white p-10 rounded-[2.5rem] border shadow-xl space-y-6">
-              <div className="space-y-2">
-                 <label className="text-[10px] font-bold uppercase text-slate-400 tracking-widest ml-1">Current Mission</label>
-                 <textarea value={missionInput} onChange={(e) => setMissionInput(e.target.value)} className="w-full p-8 border rounded-3xl bg-slate-50 font-serif text-2xl leading-relaxed outline-none focus:ring-2 focus:ring-indigo-500 transition-all min-h-[180px] text-slate-900" placeholder="Unified Parish Mission..." />
+        </div>
+      )}
+
+      {showContactForm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+           <div className="bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-300">
+              <div className="p-8 border-b flex justify-between items-center bg-slate-50">
+                 <h3 className="text-2xl font-bold font-serif">{editingContact?.id ? 'Edit Contact' : 'New Contact Profile'}</h3>
+                 <button onClick={() => setShowContactForm(false)} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X className="w-6 h-6 text-slate-500" /></button>
               </div>
-              <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4">
-                 <button onClick={handleRefineMission} disabled={isRefining || !missionInput} className="flex items-center gap-2 text-indigo-600 font-bold hover:bg-indigo-50 px-6 py-3 rounded-2xl transition-all disabled:opacity-50">{isRefining ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />} AI Refine</button>
-                 <button onClick={handleSaveMissionToCloud} className="w-full sm:w-auto bg-indigo-600 text-white px-10 py-4 rounded-2xl font-bold shadow-xl shadow-indigo-100 hover:bg-indigo-700 active:scale-95 transition-all flex items-center justify-center gap-2">{showSavedToast ? <Check className="w-5 h-5" /> : <Save className="w-5 h-5" />} {showSavedToast ? 'Synced!' : 'Save Mission'}</button>
-              </div>
+              <form onSubmit={handleSaveContactForm} className="p-8 space-y-6 overflow-y-auto">
+                 <input type="text" placeholder="Full Name" className={inputClasses} value={editingContact?.name || ''} onChange={e => setEditingContact({...editingContact, name: e.target.value})} />
+                 <input type="text" placeholder="Parish Title" className={inputClasses} value={editingContact?.title || ''} onChange={e => setEditingContact({...editingContact, title: e.target.value})} />
+                 <input type="email" placeholder="Email Address" className={inputClasses} value={editingContact?.email || ''} onChange={e => setEditingContact({...editingContact, email: e.target.value})} />
+                 <input type="tel" placeholder="Phone Number" className={inputClasses} value={editingContact?.phone || ''} onChange={e => setEditingContact({...editingContact, phone: e.target.value})} />
+                 <div className="flex gap-4">
+                   <button type="button" onClick={() => setShowContactForm(false)} className="flex-1 py-4 text-slate-500 font-bold border rounded-2xl">Cancel</button>
+                   <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl">Save Profile</button>
+                 </div>
+              </form>
            </div>
         </div>
       )}

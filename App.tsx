@@ -7,7 +7,8 @@ import ChurchPage from './pages/ChurchPage';
 import EventsPage from './pages/EventsPage';
 import ContactsPage from './pages/ContactsPage';
 import AdminDashboard from './pages/AdminDashboard';
-import { UserRole, ChurchEvent, ChurchGroup, MissionStatement, ChurchContact, Subscriber, Feedback } from './types';
+import Chatbot from './components/Chatbot';
+import { UserRole, ChurchEvent, ChurchGroup, MissionStatement, ChurchContact, Subscriber, Feedback, KnowledgeEntry } from './types';
 import { INITIAL_EVENTS, INITIAL_GROUPS, INITIAL_MISSION, INITIAL_CONTACTS, DEFAULT_GOOGLE_SHEETS_URL } from './constants';
 import { Shield, Lock, ArrowRight, AlertCircle, RefreshCw, Mail, Key } from 'lucide-react';
 import { syncEntryToSheet, fetchSheetData, syncSubscriberToGoogleSheets } from './services/googleSheetsService';
@@ -133,6 +134,11 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('church_contacts');
     return saved ? JSON.parse(saved) : INITIAL_CONTACTS;
   });
+
+  const [knowledge, setKnowledge] = useState<KnowledgeEntry[]>(() => {
+    const saved = localStorage.getItem('church_knowledge');
+    return saved ? JSON.parse(saved) : [];
+  });
   
   const [subscribers, setSubscribers] = useState<Subscriber[]>(() => {
     const saved = localStorage.getItem('church_subscribers');
@@ -256,6 +262,17 @@ const App: React.FC = () => {
     };
   };
 
+  const mapFlexibleKnowledge = (item: any, idx: number): KnowledgeEntry => {
+    return {
+      id: getFlexibleValue(item, ['id', 'uuid']) || `kb-${idx}`,
+      title: getFlexibleValue(item, ['title', 'subject']) || 'Untitled Entry',
+      content: getFlexibleValue(item, ['content', 'description', 'text']) || '',
+      attachmentUrl: getFlexibleValue(item, ['attachmenturl', 'attachment', 'file']) || '',
+      attachmentName: getFlexibleValue(item, ['attachmentname', 'filename']) || '',
+      lastUpdated: getFlexibleValue(item, ['lastupdated', 'date']) || new Date().toISOString()
+    };
+  };
+
   const mapFlexibleSubscriber = (item: any, idx: number): Subscriber => {
     return {
       id: getFlexibleValue(item, ['id', 'uuid']) || `sub-${idx}`,
@@ -295,7 +312,8 @@ const App: React.FC = () => {
         fetchSheetData(url, 'groups'),
         fetchSheetData(url, 'contacts'),
         fetchSheetData(url, 'mission'),
-        fetchSheetData(url, 'feedback')
+        fetchSheetData(url, 'feedback'),
+        fetchSheetData(url, 'knowledge')
       ]);
 
       const getVal = (idx: number) => {
@@ -309,6 +327,7 @@ const App: React.FC = () => {
       const contactData = getVal(3);
       const missionData = getVal(4);
       const feedbackData = getVal(5);
+      const knowledgeData = getVal(6);
 
       if (subData?.length > 0) setSubscribers(subData.map(mapFlexibleSubscriber));
       if (eventData?.length > 0) setEvents(eventData.map(mapFlexibleEvent));
@@ -316,6 +335,7 @@ const App: React.FC = () => {
       if (contactData?.length > 0) setContacts(contactData.map(mapFlexibleContact));
       if (missionData?.length > 0) setMission(mapFlexibleMission(missionData[missionData.length - 1]));
       if (feedbackData?.length > 0) setFeedback(feedbackData.map(mapFlexibleFeedback));
+      if (knowledgeData?.length > 0) setKnowledge(knowledgeData.map(mapFlexibleKnowledge));
       
     } catch (err: any) {
       console.error("Cloud Sync Failed:", err.message);
@@ -344,7 +364,8 @@ const App: React.FC = () => {
     localStorage.setItem('church_subscribers', JSON.stringify(subscribers));
     localStorage.setItem('church_feedback', JSON.stringify(feedback));
     localStorage.setItem('church_mission', JSON.stringify(mission));
-  }, [events, groups, contacts, subscribers, feedback, mission]);
+    localStorage.setItem('church_knowledge', JSON.stringify(knowledge));
+  }, [events, groups, contacts, subscribers, feedback, mission, knowledge]);
 
   const handleLoginSuccess = () => {
     setIsAdminLoggedIn(true);
@@ -379,6 +400,14 @@ const App: React.FC = () => {
       return exists ? prev.map(c => c.id === contact.id ? contact : c) : [...prev, contact];
     });
     if (googleSheetsUrl) await syncEntryToSheet(googleSheetsUrl, 'contacts', contact);
+  };
+
+  const handleSaveKnowledge = async (entry: KnowledgeEntry) => {
+    setKnowledge(prev => {
+      const exists = prev.find(e => e.id === entry.id);
+      return exists ? prev.map(e => e.id === entry.id ? entry : e) : [...prev, entry];
+    });
+    if (googleSheetsUrl) await syncEntryToSheet(googleSheetsUrl, 'knowledge', entry);
   };
 
   const handleSaveMission = async (newMission: MissionStatement) => {
@@ -438,6 +467,7 @@ const App: React.FC = () => {
                 contacts={contacts} 
                 subscribers={subscribers}
                 feedback={feedback}
+                knowledge={knowledge}
                 mission={mission} 
                 googleSheetsUrl={googleSheetsUrl} 
                 isSyncing={isSyncing} 
@@ -447,6 +477,8 @@ const App: React.FC = () => {
                 onDeleteGroup={(id) => setGroups(g => g.filter(x => x.id !== id))} 
                 onSaveContact={handleSaveContact} 
                 onDeleteContact={(id) => setContacts(c => c.filter(x => x.id !== id))} 
+                onSaveKnowledge={handleSaveKnowledge}
+                onDeleteKnowledge={(id) => setKnowledge(k => k.filter(x => x.id !== id))}
                 onSaveMission={handleSaveMission} 
                 onUpdateSubscribers={setSubscribers}
                 onUpdateFeedback={setFeedback}
@@ -454,6 +486,7 @@ const App: React.FC = () => {
                 onBulkUpdateEvents={setEvents} 
                 onBulkUpdateGroups={setGroups} 
                 onBulkUpdateContacts={setContacts} 
+                onBulkUpdateKnowledge={setKnowledge}
                 onRefreshAll={syncAllFromCloud}
                 onLogout={handleLogout}
               />
@@ -462,6 +495,9 @@ const App: React.FC = () => {
             )} 
           />
         </Routes>
+        
+        {/* New Parish Chatbot */}
+        <Chatbot knowledge={knowledge} events={events} />
       </Layout>
     </Router>
   );

@@ -10,7 +10,7 @@ import {
   getDay, 
   getDate, 
   startOfDay,
-  differenceInMinutes
+  format as dateFnsFormat
 } from 'date-fns';
 import { ChurchEvent } from '../types';
 
@@ -19,11 +19,23 @@ export interface EventInstance extends ChurchEvent {
   instanceEnd: Date;
 }
 
-const isValidDate = (d: any): d is Date => d instanceof Date && !isNaN(d.getTime());
+const coerceBoolean = (val: any): boolean => {
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'string') {
+    const s = val.toLowerCase().trim();
+    return s === 'true' || s === 'yes' || s === '1' || s === 'on';
+  }
+  return !!val;
+};
+
+const coerceNumber = (val: any, fallback: number): number => {
+  if (val === undefined || val === null || val === '') return fallback;
+  const n = Number(val);
+  return isNaN(n) ? fallback : n;
+};
 
 /**
  * Parses a date or time string into a 'local' Date object for a specific base date.
- * This function is critical for preventing timezone shifts.
  */
 const getLocalTimeOnDate = (dateStr: string, timeStr?: string): Date => {
   let y = new Date().getFullYear(), m = new Date().getMonth(), d = new Date().getDate();
@@ -53,28 +65,13 @@ const getLocalTimeOnDate = (dateStr: string, timeStr?: string): Date => {
   return result;
 };
 
-const coerceBoolean = (val: any): boolean => {
-  if (typeof val === 'boolean') return val;
-  if (typeof val === 'string') {
-    const s = val.toLowerCase().trim();
-    return s === 'true' || s === 'yes' || s === '1' || s === 'on';
-  }
-  return !!val;
-};
-
-const coerceNumber = (val: any, fallback: number): number => {
-  if (val === undefined || val === null || val === '') return fallback;
-  const n = Number(val);
-  return isNaN(n) ? fallback : n;
-};
-
 /**
  * Expands recurring events into a list of instances within the given range.
  */
 export const expandEvents = (events: ChurchEvent[], rangeStart: Date, rangeEnd: Date): EventInstance[] => {
   const instances: EventInstance[] = [];
   const startLimit = startOfDay(rangeStart);
-  const endLimit = endOfMonth(rangeEnd); // Be slightly more generous on end limit
+  const endLimit = endOfMonth(rangeEnd);
 
   events.forEach(event => {
     if (!event.eventDate) return;
@@ -96,7 +93,6 @@ export const expandEvents = (events: ChurchEvent[], rangeStart: Date, rangeEnd: 
 
     const durationMs = eventEnd.getTime() - eventStart.getTime();
 
-    // 1. Handle Non-Recurring
     if (!isRecurring || recurrenceType === 'None') {
       if (isWithinRange(eventStart, startLimit, endLimit)) {
         instances.push({
@@ -109,7 +105,6 @@ export const expandEvents = (events: ChurchEvent[], rangeStart: Date, rangeEnd: 
       return;
     }
 
-    // 2. Handle Recurring
     let currentPointer = startOfDay(eventStart);
     let seriesEnd: Date;
     if (event.recurrenceEndDate) {
@@ -123,7 +118,6 @@ export const expandEvents = (events: ChurchEvent[], rangeStart: Date, rangeEnd: 
     let safety = 0;
     while ((isBefore(currentPointer, searchLimit) || isSameDay(currentPointer, searchLimit)) && safety < 500) {
       safety++;
-
       let shouldAdd = false;
       const checkDay = startOfDay(currentPointer);
 
@@ -192,4 +186,54 @@ const getRelativeDateOfMonth = (monthDate: Date, dayOfWeek: number, weekOfMonth:
     }
   }
   return firstOfMonth;
+};
+
+/** 
+ * CALENDAR EXPORT HELPERS 
+ */
+
+const formatToICSDate = (date: Date) => {
+  return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+};
+
+export const generateICSLink = (event: EventInstance) => {
+  const start = formatToICSDate(event.instanceStart);
+  const end = formatToICSDate(event.instanceEnd);
+  
+  const icsContent = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//East Hillfoots Church//NONSGML Event//EN',
+    'BEGIN:VEVENT',
+    `DTSTART:${start}`,
+    `DTEND:${end}`,
+    `SUMMARY:${event.title}`,
+    `DESCRIPTION:${event.description.replace(/\n/g, '\\n')}`,
+    `LOCATION:${event.location}`,
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ].join('\n');
+
+  const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+  return URL.createObjectURL(blob);
+};
+
+export const generateGoogleCalendarLink = (event: EventInstance) => {
+  const start = formatToICSDate(event.instanceStart);
+  const end = formatToICSDate(event.instanceEnd);
+  const details = encodeURIComponent(event.description);
+  const location = encodeURIComponent(event.location);
+  const text = encodeURIComponent(event.title);
+
+  return `https://www.google.com/calendar/render?action=TEMPLATE&text=${text}&dates=${start}/${end}&details=${details}&location=${location}`;
+};
+
+export const generateOutlookLink = (event: EventInstance) => {
+  const start = event.instanceStart.toISOString();
+  const end = event.instanceEnd.toISOString();
+  const subject = encodeURIComponent(event.title);
+  const location = encodeURIComponent(event.location);
+  const body = encodeURIComponent(event.description);
+
+  return `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&startdt=${start}&enddt=${end}&subject=${subject}&location=${location}&body=${body}`;
 };
