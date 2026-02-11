@@ -75,9 +75,6 @@ const ContactsPage: React.FC<ContactsPageProps> = ({ contacts, userRole, onDelet
                 {contact.title && (
                     <span className="text-indigo-600 font-bold text-[10px] uppercase tracking-widest bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">{contact.title}</span>
                 )}
-                {contact.role && (
-                    <span className="text-emerald-600 font-bold text-[10px] uppercase tracking-widest bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">{contact.role}</span>
-                )}
               </div>
               <div className="mt-6 pt-6 border-t space-y-4">
                 {contact.email && (

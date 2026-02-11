@@ -2,17 +2,19 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Church, Home, Calendar, Menu, X, Shield, Contact } from 'lucide-react';
-import { UserRole, Feedback } from '../types';
+import { UserRole, Feedback, ContactRequest } from '../types';
 import FeedbackButton from './FeedbackButton';
+import ContactUsButton from './ContactUsButton';
 import { DEFAULT_GOOGLE_SHEETS_URL } from '../constants';
 
 interface LayoutProps {
   children: React.ReactNode;
   userRole: UserRole;
   onFeedbackSubmitted?: (feedback: Feedback) => void;
+  onSaveRequest?: (request: ContactRequest) => void;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, userRole, onFeedbackSubmitted }) => {
+const Layout: React.FC<LayoutProps> = ({ children, userRole, onFeedbackSubmitted, onSaveRequest }) => {
   const [isOpen, setIsOpen] = React.useState(false);
   const location = useLocation();
   
@@ -136,8 +138,9 @@ const Layout: React.FC<LayoutProps> = ({ children, userRole, onFeedbackSubmitted
         </footer>
       </main>
 
-      {/* Feedback Button - Global */}
+      {/* Global Action Buttons */}
       <FeedbackButton googleSheetsUrl={googleSheetsUrl} onFeedbackSubmitted={onFeedbackSubmitted} />
+      <ContactUsButton googleSheetsUrl={googleSheetsUrl} onSaveRequest={onSaveRequest} />
     </div>
   );
 };

@@ -8,10 +8,11 @@ import EventsPage from './pages/EventsPage';
 import ContactsPage from './pages/ContactsPage';
 import AdminDashboard from './pages/AdminDashboard';
 import Chatbot from './components/Chatbot';
-import { UserRole, ChurchEvent, ChurchGroup, MissionStatement, ChurchContact, Subscriber, Feedback, KnowledgeEntry } from './types';
+import { UserRole, ChurchEvent, ChurchGroup, MissionStatement, ChurchContact, Subscriber, Feedback, KnowledgeEntry, ContactRequest } from './types';
 import { INITIAL_EVENTS, INITIAL_GROUPS, INITIAL_MISSION, INITIAL_CONTACTS, DEFAULT_GOOGLE_SHEETS_URL } from './constants';
 import { Shield, Lock, ArrowRight, AlertCircle, RefreshCw, Mail, Key } from 'lucide-react';
-import { syncEntryToSheet, fetchSheetData, syncSubscriberToGoogleSheets } from './services/googleSheetsService';
+// Fix: removed non-existent export syncSubscriberToGoogleSheets as syncEntryToSheet is used instead
+import { syncEntryToSheet, fetchSheetData } from './services/googleSheetsService';
 
 const AdminAuthWrapper: React.FC<{ 
   onLoginSuccess: () => void;
@@ -145,6 +146,11 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : [];
   });
 
+  const [requests, setRequests] = useState<ContactRequest[]>(() => {
+    const saved = localStorage.getItem('church_requests');
+    return saved ? JSON.parse(saved) : [];
+  });
+
   const [feedback, setFeedback] = useState<Feedback[]>(() => {
     const saved = localStorage.getItem('church_feedback');
     return saved ? JSON.parse(saved) : [];
@@ -248,6 +254,18 @@ const App: React.FC = () => {
     };
   };
 
+  const mapFlexibleRequest = (item: any, idx: number): ContactRequest => {
+    return {
+      id: getFlexibleValue(item, ['id', 'uuid']) || `req-${idx}`,
+      name: getFlexibleValue(item, ['name', 'fullname', 'sender']) || 'Anonymous',
+      email: getFlexibleValue(item, ['email', 'emailaddress']) || '',
+      phone: String(getFlexibleValue(item, ['phone', 'telephone']) || ''),
+      subject: getFlexibleValue(item, ['subject', 'topic']) || 'General',
+      message: getFlexibleValue(item, ['message', 'text', 'inquiry']) || '',
+      submittedAt: getFlexibleValue(item, ['submittedat', 'date', 'time']) || new Date().toISOString()
+    };
+  };
+
   const mapFlexibleGroup = (item: any, idx: number): ChurchGroup => {
     const rawId = getFlexibleValue(item, ['id', 'uuid', 'entryid']);
     const rawChurch = getFlexibleValue(item, ['church', 'location', 'parish']);
@@ -313,7 +331,8 @@ const App: React.FC = () => {
         fetchSheetData(url, 'contacts'),
         fetchSheetData(url, 'mission'),
         fetchSheetData(url, 'feedback'),
-        fetchSheetData(url, 'knowledge')
+        fetchSheetData(url, 'knowledge'),
+        fetchSheetData(url, 'requests')
       ]);
 
       const getVal = (idx: number) => {
@@ -328,6 +347,7 @@ const App: React.FC = () => {
       const missionData = getVal(4);
       const feedbackData = getVal(5);
       const knowledgeData = getVal(6);
+      const requestData = getVal(7);
 
       if (subData?.length > 0) setSubscribers(subData.map(mapFlexibleSubscriber));
       if (eventData?.length > 0) setEvents(eventData.map(mapFlexibleEvent));
@@ -336,6 +356,7 @@ const App: React.FC = () => {
       if (missionData?.length > 0) setMission(mapFlexibleMission(missionData[missionData.length - 1]));
       if (feedbackData?.length > 0) setFeedback(feedbackData.map(mapFlexibleFeedback));
       if (knowledgeData?.length > 0) setKnowledge(knowledgeData.map(mapFlexibleKnowledge));
+      if (requestData?.length > 0) setRequests(requestData.map(mapFlexibleRequest));
       
     } catch (err: any) {
       console.error("Cloud Sync Failed:", err.message);
@@ -363,9 +384,10 @@ const App: React.FC = () => {
     localStorage.setItem('church_contacts', JSON.stringify(contacts));
     localStorage.setItem('church_subscribers', JSON.stringify(subscribers));
     localStorage.setItem('church_feedback', JSON.stringify(feedback));
+    localStorage.setItem('church_requests', JSON.stringify(requests));
     localStorage.setItem('church_mission', JSON.stringify(mission));
     localStorage.setItem('church_knowledge', JSON.stringify(knowledge));
-  }, [events, groups, contacts, subscribers, feedback, mission, knowledge]);
+  }, [events, groups, contacts, subscribers, feedback, requests, mission, knowledge]);
 
   const handleLoginSuccess = () => {
     setIsAdminLoggedIn(true);
@@ -410,6 +432,13 @@ const App: React.FC = () => {
     if (googleSheetsUrl) await syncEntryToSheet(googleSheetsUrl, 'knowledge', entry);
   };
 
+  const handleSaveRequest = async (request: ContactRequest) => {
+    setRequests(prev => [request, ...prev]);
+    if (googleSheetsUrl) {
+      await syncEntryToSheet(googleSheetsUrl, 'requests', request);
+    }
+  };
+
   const handleSaveMission = async (newMission: MissionStatement) => {
     setMission(newMission);
     if (googleSheetsUrl) await syncEntryToSheet(googleSheetsUrl, 'mission', newMission);
@@ -432,7 +461,7 @@ const App: React.FC = () => {
 
   return (
     <Router>
-      <Layout userRole={userRole} onFeedbackSubmitted={handleFeedbackSubmitted}>
+      <Layout userRole={userRole} onFeedbackSubmitted={handleFeedbackSubmitted} onSaveRequest={handleSaveRequest}>
         {isSyncing && (
           <div className="fixed top-24 right-4 z-[100] bg-indigo-600 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 animate-bounce">
             <RefreshCw className="w-4 h-4 animate-spin" />
@@ -466,6 +495,7 @@ const App: React.FC = () => {
                 groups={groups} 
                 contacts={contacts} 
                 subscribers={subscribers}
+                requests={requests}
                 feedback={feedback}
                 knowledge={knowledge}
                 mission={mission} 
@@ -481,6 +511,7 @@ const App: React.FC = () => {
                 onDeleteKnowledge={(id) => setKnowledge(k => k.filter(x => x.id !== id))}
                 onSaveMission={handleSaveMission} 
                 onUpdateSubscribers={setSubscribers}
+                onUpdateRequests={setRequests}
                 onUpdateFeedback={setFeedback}
                 onUpdateSheetsUrl={handleUpdateSheetsUrl} 
                 onBulkUpdateEvents={setEvents} 

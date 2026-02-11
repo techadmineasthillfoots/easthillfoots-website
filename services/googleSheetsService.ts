@@ -24,9 +24,7 @@ export const testConnection = async (url: string): Promise<SyncResult> => {
   }
 
   try {
-    // Simple fetch without headers to avoid CORS preflight on GET
     const response = await fetch(`${cleanUrl}?sheet=health_check`);
-
     if (response.ok) {
       return { success: true, message: "Connection Verified! Script is active.", timestamp };
     }
@@ -45,8 +43,6 @@ export const fetchSheetData = async (url: string, sheetName: string): Promise<an
   
   try {
     const fetchUrl = `${cleanUrl}${cleanUrl.includes('?') ? '&' : '?'}sheet=${encodeURIComponent(sheetName)}`;
-    
-    // No headers = "simple request" = usually no CORS preflight issues with GAS
     const response = await fetch(fetchUrl);
 
     if (!response.ok) {
@@ -55,7 +51,6 @@ export const fetchSheetData = async (url: string, sheetName: string): Promise<an
     }
 
     const data = await response.json();
-    
     if (data && data.error) {
       console.error(`Script error for ${sheetName}:`, data.error);
       return [];
@@ -69,7 +64,8 @@ export const fetchSheetData = async (url: string, sheetName: string): Promise<an
 };
 
 /**
- * Sync function for individual entries using no-cors POST
+ * Robust sync function for individual entries.
+ * Uses form-encoding which is more widely compatible with Google Apps Script templates.
  */
 export const syncEntryToSheet = async (url: string, sheetName: string, entry: any): Promise<SyncResult> => {
   const timestamp = new Date().toLocaleTimeString();
@@ -80,39 +76,43 @@ export const syncEntryToSheet = async (url: string, sheetName: string, entry: an
   }
 
   try {
-    // We send sheet name as both a parameter and in the body for maximum compatibility
     const syncUrl = `${cleanUrl}${cleanUrl.includes('?') ? '&' : '?'}sheet=${encodeURIComponent(sheetName)}`;
     
-    const body = {
+    // We send data as a JSON string within a 'payload' field.
+    // This allows the Apps Script to easily parse it regardless of how it's written.
+    const body = new URLSearchParams();
+    body.append('payload', JSON.stringify({
       ...entry,
       sheet: sheetName,
-      sentAt: new Date().toISOString()
-    };
+      sync_timestamp: new Date().toISOString()
+    }));
 
-    // We use mode: 'no-cors' to allow cross-origin POST to Google Scripts.
-    // This makes the response "opaque" (cannot read success/fail from JS),
-    // but the data is sent successfully to the script.
+    console.debug(`Syncing to ${sheetName}...`, entry);
+
+    // mode: 'no-cors' is required to handle the 302 redirect to script.googleusercontent.com
     await fetch(syncUrl, {
       method: 'POST',
       mode: 'no-cors',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify(body),
+      cache: 'no-cache',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: body.toString(),
     });
 
     return { 
       success: true, 
-      message: `Sync command sent to ${sheetName}.`, 
+      message: `Sync dispatched to '${sheetName}'.`, 
       timestamp 
     };
   } catch (error: any) {
-    console.error(`Sync Error [${sheetName}]:`, error);
-    return { success: false, message: error.message, timestamp };
+    console.error(`Sync Dispatch Failed [${sheetName}]:`, error);
+    return { success: false, message: `Network error: ${error.message}`, timestamp };
   }
 };
 
 export const syncFullTableToSheet = async (url: string, sheetName: string, items: any[]): Promise<SyncResult[]> => {
   const results: SyncResult[] = [];
-  // For safety, limit to last 50 items if pushing bulk
   const toSync = items.slice(-50);
   for (const item of toSync) {
     const res = await syncEntryToSheet(url, sheetName, item);
@@ -120,6 +120,3 @@ export const syncFullTableToSheet = async (url: string, sheetName: string, items
   }
   return results;
 };
-
-// Legacy support
-export const syncSubscriberToGoogleSheets = (url: string, sub: any) => syncEntryToSheet(url, 'subscriber', sub);

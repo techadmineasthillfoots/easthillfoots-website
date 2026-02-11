@@ -14,13 +14,15 @@ const ChurchPage: React.FC<ChurchPageProps> = ({ type, groups }) => {
       message: "Nestled in the heart of the community at the foot of the Ochils, Dollar Parish Church has been a beacon of faith for centuries. We are a welcoming congregation committed to serving our local neighbors and fostering a vibrant spiritual life.",
       address: "Dollar, FK14, Scotland",
       service: "Sundays at 11:00 AM",
-      image: "https://images.unsplash.com/photo-1548678967-f1fc5d936894?q=80&w=2070&auto=format&fit=crop"
+      image: "https://images.unsplash.com/photo-1548678967-f1fc5d936894?q=80&w=2070&auto=format&fit=crop",
+      mapsUrl: "https://www.google.com/maps/search/?api=1&query=Dollar+Parish+Church+Dollar+FK14"
     },
     Muckhart: {
       message: "Muckhart Parish Church offers a peaceful sanctuary in a beautiful rural setting. Our historic building and friendly congregation provide a warm welcome to all who seek spiritual growth and fellowship.",
       address: "Muckhart, FK14 7JL, Scotland",
       service: "Sundays at 9:30 AM",
-      image: "https://images.unsplash.com/photo-1472214103451-9374bd1c798e?q=80&w=2070&auto=format&fit=crop"
+      image: "https://images.unsplash.com/photo-1472214103451-9374bd1c798e?q=80&w=2070&auto=format&fit=crop",
+      mapsUrl: "https://www.google.com/maps/search/?api=1&query=Muckhart+Parish+Church+Muckhart+FK14+7JL"
     }
   };
 
@@ -107,10 +109,15 @@ const ChurchPage: React.FC<ChurchPageProps> = ({ type, groups }) => {
                 <p className="text-sm text-slate-500">{data.service}</p>
               </div>
             </div>
-            <button className="w-full bg-slate-900 text-white py-3 rounded-xl hover:bg-black transition-colors flex items-center justify-center space-x-2 font-medium">
+            <a 
+              href={data.mapsUrl} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="w-full bg-slate-900 text-white py-3 rounded-xl hover:bg-black transition-colors flex items-center justify-center space-x-2 font-medium"
+            >
               <span>View Location on Maps</span>
               <ArrowRight className="w-4 h-4" />
-            </button>
+            </a>
           </div>
 
           <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100">
